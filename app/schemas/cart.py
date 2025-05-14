@@ -1,6 +1,8 @@
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from decimal import Decimal
+from datetime import datetime
+from uuid import UUID
 
 # CartItem Schemas
 class CartItemBase(BaseModel):
@@ -15,9 +17,8 @@ class CartItemUpdate(BaseModel):
 
 class CartItemInDB(CartItemBase):
     id: int
-    cart_id: int
+    cart_id: UUID
     product: Optional["ProductResponse"] = None
-    subtotal: Decimal
 
     class Config:
         from_attributes = True
@@ -33,10 +34,9 @@ class CartCreate(CartBase):
     pass
 
 class CartInDB(CartBase):
-    id: int
-    user_id: int
+    id: UUID
+    created_at: datetime
     items: List[CartItemResponse] = []
-    total: Decimal = Decimal("0.00")
 
     class Config:
         from_attributes = True

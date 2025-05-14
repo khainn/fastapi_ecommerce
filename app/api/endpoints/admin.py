@@ -1,11 +1,15 @@
 import shutil
+from typing import List
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Header
-from sqlmodel import Session
+from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
 from app.core.db import get_session
-from app.models.models import Product, ProductCategory
+from app.models.models import Product, ProductCategory, Order, CartItem
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse
 from app.schemas.category import ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryResponse
+from app.schemas.order import OrderResponse
+from app.common.enums import OrderStatus
 
 router = APIRouter()
 
@@ -19,9 +23,14 @@ def get_category_or_404(session: Session, category_id: int) -> ProductCategory:
         raise HTTPException(status_code=404, detail=f"Category with id {category_id} not found")
     return category
 
+def get_order_or_404(session: Session, order_id: int) -> Order:
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order with id {order_id} not found")
+    return order
+
 @router.post("/product", response_model=ProductResponse, dependencies=[Depends(verify_admin)])
 def create_product(product: ProductCreate, session: Session = Depends(get_session)):
-    # Check if category exists
     get_category_or_404(session, product.category_id)
     
     db_product = Product(**product.model_dump())
@@ -36,7 +45,6 @@ def update_product(id: int, data: ProductUpdate, session: Session = Depends(get_
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Check if new category exists if category_id is being updated
     if data.category_id is not None:
         get_category_or_404(session, data.category_id)
     
@@ -96,3 +104,88 @@ def delete_category(id: int, session: Session = Depends(get_session)):
     session.delete(db_cat)
     session.commit()
     return {"message": "Category deleted successfully"}
+
+# Admin endpoints for order management
+@router.get("/orders", response_model=List[OrderResponse])
+def admin_list_all_orders(session: Session = Depends(get_session)):
+    """Admin endpoint to list all orders."""
+    orders = session.exec(select(Order)).all()
+    return orders
+
+@router.get("/orders/{order_id}/details", response_model=OrderResponse)
+def admin_get_order_details(order_id: int, session: Session = Depends(get_session)):
+    """Admin endpoint to get order details including cart items."""
+    order = get_order_or_404(session, order_id)
+    
+    # Get cart items for this order
+    cart_items = session.exec(
+        select(CartItem)
+        .options(selectinload(CartItem.product))
+        .where(CartItem.cart_id == order.cart_id)
+    ).all()
+    
+    # Create response with cart items
+    order_dict = order.model_dump()
+    order_dict['cart_items'] = cart_items
+    
+    return order_dict
+
+@router.get("/orders/search", response_model=List[OrderResponse])
+def admin_search_orders(
+    customer_name: str = None,
+    customer_phone: str = None,
+    session: Session = Depends(get_session)
+):
+    """Admin endpoint to search orders by customer details."""
+    statement = select(Order)
+    
+    if customer_name:
+        statement = statement.where(Order.customer_name.ilike(f"%{customer_name}%"))
+    
+    if customer_phone:
+        statement = statement.where(Order.customer_phone.ilike(f"%{customer_phone}%"))
+    
+    orders = session.exec(statement).all()
+    return orders
+
+@router.get("/orders/revenue", response_model=dict)
+def admin_get_revenue(session: Session = Depends(get_session)):
+    """Admin endpoint to get total revenue and order statistics."""
+    orders = session.exec(select(Order)).all()
+    
+    total_revenue = sum(order.total_price for order in orders)
+    total_orders = len(orders)
+    average_order_value = total_revenue / total_orders if total_orders > 0 else 0
+    
+    return {
+        "total_revenue": total_revenue,
+        "total_orders": total_orders,
+        "average_order_value": average_order_value
+    }
+
+@router.put("/orders/{order_id}/status", response_model=OrderResponse)
+def admin_update_order_status(
+    order_id: int, 
+    status: OrderStatus,
+    session: Session = Depends(get_session)
+):
+    """Admin endpoint to update the status of an order."""
+    order = get_order_or_404(session, order_id)
+    
+    # Update the order status
+    order.status = status.value
+    session.add(order)
+    session.commit()
+    session.refresh(order)
+    
+    return order
+
+
+
+@router.delete("/orders/{order_id}")
+def admin_delete_order(order_id: int, session: Session = Depends(get_session)):
+    """Admin endpoint to delete an order (for testing/cleanup purposes)."""
+    order = get_order_or_404(session, order_id)
+    session.delete(order)
+    session.commit()
+    return {"message": "Order deleted successfully"}

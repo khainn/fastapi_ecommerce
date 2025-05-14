@@ -4,6 +4,6 @@ from fastapi.responses import JSONResponse
 router = APIRouter()
 
 
-@router.get("/health")
+@router.head("/health")
 def health_check() -> JSONResponse:
     return JSONResponse(content={"status": "ok"})
