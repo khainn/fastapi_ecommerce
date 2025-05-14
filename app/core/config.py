@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 24 * 7  # Token expired after 7 days
     SECURITY_ALGORITHM: str = 'HS256'
 
+    # Admin credentials
+    ADMIN_USERNAME: str = os.getenv('ADMIN_USERNAME', 'admin')
+    ADMIN_PASSWORD: str = os.getenv('ADMIN_PASSWORD', '')
+
     # Database Configuration
     DATABASE_URL: str = os.getenv('DATABASE_URL')
     

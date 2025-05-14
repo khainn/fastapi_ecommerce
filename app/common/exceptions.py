@@ -2,7 +2,7 @@ import logging
 
 from fastapi.exceptions import HTTPException as RestAPIException
 from fastapi.responses import Response
-from jwt.exceptions import JWTException
+from jwt.exceptions import InvalidTokenError
 
 from .error_codes import *  # noqa: F403 # pylint: disable=wildcard-import,unused-wildcard-import
 
@@ -114,7 +114,7 @@ def api_error_handler(error, _):
         error_message = error.detail if isinstance(error.detail, str) else None
         error_detail = error.detail if not isinstance(error.detail, str) else None
         error.description = error_data(error_code=error_code, error_message=error_message, error_detail=error_detail)
-    elif isinstance(error, JWTException):
+    elif isinstance(error, InvalidTokenError):
         error_code = 401
         error = Unauthorized(401000, str(error))
     else:

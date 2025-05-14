@@ -1,14 +1,20 @@
-import jwt
+import jwt as PyJWT
+from datetime import datetime, timedelta
 
 
 class JWTManager:
 
     @staticmethod
-    def create_token(payload: any, secret_key, algorithm='HS256') -> str:
-        token = jwt.encode(payload, secret_key, algorithm=algorithm)
+    def create_token(payload: dict, secret_key: str, algorithm: str = 'HS256') -> str:
+        token = PyJWT.encode(payload, secret_key, algorithm=algorithm)
         return token
 
     @staticmethod
-    def decode_token(token, algorithms='HS256', secret_key='HS256') -> any:
-        payload = jwt.decode(jwt=token, key=secret_key, algorithms=algorithms)
-        return payload
+    def decode_token(token: str, secret_key: str, algorithms: list = ['HS256']) -> dict:
+        try:
+            payload = PyJWT.decode(token, secret_key, algorithms=algorithms)
+            return payload
+        except PyJWT.ExpiredSignatureError:
+            raise Exception("Token has expired")
+        except PyJWT.InvalidTokenError:
+            raise Exception("Invalid token")

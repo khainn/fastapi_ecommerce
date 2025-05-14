@@ -1,21 +1,50 @@
 import shutil
 from typing import List
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Header
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Header, Security
+from fastapi.security import APIKeyHeader
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from app.core.db import get_session
+from app.core.config import settings
 from app.models.models import Product, ProductCategory, Order, CartItem
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse
 from app.schemas.category import ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryResponse
 from app.schemas.order import OrderResponse
+from app.schemas.admin import AdminLogin, AdminToken
 from app.common.enums import OrderStatus
+from app.common.jwt_manager import JWTManager
 
 router = APIRouter()
 
-def verify_admin(x_api_key: str = Header(...)):
-    if x_api_key != "admin-secret":
-        raise HTTPException(status_code=401, detail="Unauthorized")
+# Define API key header
+api_key_header = APIKeyHeader(name="Authorization", auto_error=True)
+
+async def verify_admin(authorization: str = Security(api_key_header)):
+    try:
+        # Remove 'Bearer ' prefix if present
+        token = authorization.replace('Bearer ', '') if authorization.startswith('Bearer ') else authorization
+        payload = JWTManager.decode_token(token, settings.SECRET_KEY)
+        if payload.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+
+@router.post("/login", response_model=AdminToken)
+async def admin_login(login_data: AdminLogin):
+    if login_data.username != settings.ADMIN_USERNAME or login_data.password != settings.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    
+    payload = {
+        "sub": login_data.username,
+        "role": "admin",
+        "exp": datetime.utcnow() + timedelta(seconds=settings.ACCESS_TOKEN_EXPIRE_SECONDS)
+    }
+    
+    access_token = JWTManager.create_token(payload, settings.SECRET_KEY)
+    return {"access_token": access_token, "token_type": "bearer"}
 
 def get_category_or_404(session: Session, category_id: int) -> ProductCategory:
     category = session.get(ProductCategory, category_id)
@@ -29,8 +58,12 @@ def get_order_or_404(session: Session, order_id: int) -> Order:
         raise HTTPException(status_code=404, detail=f"Order with id {order_id} not found")
     return order
 
-@router.post("/product", response_model=ProductResponse, dependencies=[Depends(verify_admin)])
-def create_product(product: ProductCreate, session: Session = Depends(get_session)):
+@router.post("/product", response_model=ProductResponse)
+async def create_product(
+    product: ProductCreate, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     get_category_or_404(session, product.category_id)
     
     db_product = Product(**product.model_dump())
@@ -39,8 +72,13 @@ def create_product(product: ProductCreate, session: Session = Depends(get_sessio
     session.refresh(db_product)
     return db_product
 
-@router.put("/product/{id}", response_model=ProductResponse, dependencies=[Depends(verify_admin)])
-def update_product(id: int, data: ProductUpdate, session: Session = Depends(get_session)):
+@router.put("/product/{id}", response_model=ProductResponse)
+async def update_product(
+    id: int, 
+    data: ProductUpdate, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     db_product = session.get(Product, id)
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -54,8 +92,12 @@ def update_product(id: int, data: ProductUpdate, session: Session = Depends(get_
     session.refresh(db_product)
     return db_product
 
-@router.delete("/product/{id}", dependencies=[Depends(verify_admin)])
-def delete_product(id: int, session: Session = Depends(get_session)):
+@router.delete("/product/{id}")
+async def delete_product(
+    id: int, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     db_product = session.get(Product, id)
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -63,8 +105,13 @@ def delete_product(id: int, session: Session = Depends(get_session)):
     session.commit()
     return {"message": "Product deleted successfully"}
 
-@router.post("/product/{id}/image", dependencies=[Depends(verify_admin)])
-def upload_image(id: int, file: UploadFile = File(...), session: Session = Depends(get_session)):
+@router.post("/product/{id}/image")
+async def upload_image(
+    id: int, 
+    file: UploadFile = File(...), 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     db_product = session.get(Product, id)
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -77,16 +124,25 @@ def upload_image(id: int, file: UploadFile = File(...), session: Session = Depen
     return {"image_url": path}
 
 # Category
-@router.post("/category", response_model=ProductCategoryResponse, dependencies=[Depends(verify_admin)])
-def create_category(category: ProductCategoryCreate, session: Session = Depends(get_session)):
+@router.post("/category", response_model=ProductCategoryResponse)
+async def create_category(
+    category: ProductCategoryCreate, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     db_category = ProductCategory(**category.model_dump())
     session.add(db_category)
     session.commit()
     session.refresh(db_category)
     return db_category
 
-@router.put("/category/{id}", response_model=ProductCategoryResponse, dependencies=[Depends(verify_admin)])
-def update_category(id: int, cat: ProductCategoryUpdate, session: Session = Depends(get_session)):
+@router.put("/category/{id}", response_model=ProductCategoryResponse)
+async def update_category(
+    id: int, 
+    cat: ProductCategoryUpdate, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     db_cat = session.get(ProductCategory, id)
     if not db_cat:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -96,8 +152,12 @@ def update_category(id: int, cat: ProductCategoryUpdate, session: Session = Depe
     session.refresh(db_cat)
     return db_cat
 
-@router.delete("/category/{id}", dependencies=[Depends(verify_admin)])
-def delete_category(id: int, session: Session = Depends(get_session)):
+@router.delete("/category/{id}")
+async def delete_category(
+    id: int, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     db_cat = session.get(ProductCategory, id)
     if not db_cat:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -107,13 +167,20 @@ def delete_category(id: int, session: Session = Depends(get_session)):
 
 # Admin endpoints for order management
 @router.get("/orders", response_model=List[OrderResponse])
-def admin_list_all_orders(session: Session = Depends(get_session)):
+async def admin_list_all_orders(
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     """Admin endpoint to list all orders."""
     orders = session.exec(select(Order)).all()
     return orders
 
 @router.get("/orders/{order_id}/details", response_model=OrderResponse)
-def admin_get_order_details(order_id: int, session: Session = Depends(get_session)):
+async def admin_get_order_details(
+    order_id: int, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     """Admin endpoint to get order details including cart items."""
     order = get_order_or_404(session, order_id)
     
@@ -131,10 +198,11 @@ def admin_get_order_details(order_id: int, session: Session = Depends(get_sessio
     return order_dict
 
 @router.get("/orders/search", response_model=List[OrderResponse])
-def admin_search_orders(
+async def admin_search_orders(
     customer_name: str = None,
     customer_phone: str = None,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
 ):
     """Admin endpoint to search orders by customer details."""
     statement = select(Order)
@@ -149,7 +217,10 @@ def admin_search_orders(
     return orders
 
 @router.get("/orders/revenue", response_model=dict)
-def admin_get_revenue(session: Session = Depends(get_session)):
+async def admin_get_revenue(
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     """Admin endpoint to get total revenue and order statistics."""
     orders = session.exec(select(Order)).all()
     
@@ -164,10 +235,11 @@ def admin_get_revenue(session: Session = Depends(get_session)):
     }
 
 @router.put("/orders/{order_id}/status", response_model=OrderResponse)
-def admin_update_order_status(
+async def admin_update_order_status(
     order_id: int, 
     status: OrderStatus,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
 ):
     """Admin endpoint to update the status of an order."""
     order = get_order_or_404(session, order_id)
@@ -180,10 +252,12 @@ def admin_update_order_status(
     
     return order
 
-
-
 @router.delete("/orders/{order_id}")
-def admin_delete_order(order_id: int, session: Session = Depends(get_session)):
+async def admin_delete_order(
+    order_id: int, 
+    session: Session = Depends(get_session),
+    _: dict = Depends(verify_admin)
+):
     """Admin endpoint to delete an order (for testing/cleanup purposes)."""
     order = get_order_or_404(session, order_id)
     session.delete(order)
